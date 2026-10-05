@@ -607,8 +607,16 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
 
         flipped = (1, 1, 1)
         d = self.step_sizes[self.step_size_idx]
-        self.current_pos[axis] += direction * d * flipped[axis]
-        self.current_pos[axis] = max(min(self.current_pos[axis], 10), -10)
+        position = self.current_pos[axis]
+        target = position + direction * d * flipped[axis]
+        # Outside the nominal range, allow steps toward it without snapping
+        # to its boundary or moving farther outward.
+        lower_limit = min(-10.0, position)
+        upper_limit = max(10.0, position)
+        target = max(lower_limit, min(target, upper_limit))
+        if target == position:
+            return
+        self.current_pos[axis] = target
         self.oms.move_to(*self.current_pos, self.feedrates[self.step_size_idx])
 
     def add_waypoint(self):
