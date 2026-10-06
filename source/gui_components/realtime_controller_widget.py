@@ -10,12 +10,13 @@ import time
 
 from PySide6.QtWidgets import (
     QWidget,
-    QApplication
+    QApplication,
+    QMessageBox
 )
 from PySide6.QtCore import Qt, QObject, QEvent, QPoint, Signal, QMutex, QThread
 from PySide6.QtGui import QCursor, QMouseEvent
 from PySide6.QtUiTools import loadUiType
-from hardware.open_micro_stage_api import OpenMicroStageInterface
+from hardware.open_micro_stage_api import OpenMicroStageInterface, SerialInterface
 import numpy as np
 
 _ui_path = os.path.join(os.path.dirname(__file__), "realtime_controller_widget.ui")
@@ -43,6 +44,7 @@ def remap_to_axes(channel_values, axis_map, invert=None):
 
 class UpdateWorker(QThread):
     pose_changed = Signal(np.ndarray)  # send updated pose to main thread if needed
+    motion_failed = Signal(str)
 
     def __init__(self, oms, motion_gain, motion_limits, lowpass_strength=0.1, update_frequency=240, parent=None):
         super().__init__(parent)
@@ -114,10 +116,17 @@ class UpdateWorker(QThread):
             self.relative_device_pos += delta_vec * self.motion_gain
             self.relative_device_pos = np.clip(self.relative_device_pos, -self.motion_limits, self.motion_limits)
             self.relative_device_pos_lp = self.relative_device_pos * (1.0 - t) + self.relative_device_pos_lp * t
-            self.current_pose[:] = self.initial_device_pos + self.relative_device_pos_lp + self.device_pos_offset
+            candidate = self.initial_device_pos + self.relative_device_pos_lp + self.device_pos_offset
 
             if self.oms.is_connected():
-                self.oms.set_pose(self.current_pose[0], self.current_pose[1], self.current_pose[2])
+                status = self.oms.set_pose(*candidate)
+                if status != SerialInterface.ReplyStatus.OK:
+                    self.running = False
+                    self.motion_failed.emit(self.oms.last_motion_error or status.name)
+                    return
+                self.mutex.lock()
+                self.current_pose[:] = candidate
+                self.mutex.unlock()
 
             # print(f"Move to: {p[0]:10.7f}, {p[1]:10.7f}, {p[2]:10.7f}")
 
@@ -191,7 +200,15 @@ class RealtimeControllerWidget(QWidget, Ui_RealtimeControllerWidget):
                                           motion_limits=self.motion_limits,
                                           lowpass_strength=self.lowpass_strength)
 
+        self.update_thread.motion_failed.connect(self.on_motion_failed)
+
         self.update_thread.start()
+
+    def on_motion_failed(self, message):
+        # Runs on the GUI thread, not the serial/mouse worker thread.
+        self.stop_control()
+        QMessageBox.warning(self, "Realtime Move Not Accepted",
+                            f"Realtime control stopped; controller rejected the target:\n{message}")
 
     def stop_control(self):
         self.mouse_control_button.setChecked(False)

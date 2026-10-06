@@ -18,7 +18,7 @@ from gui_components.realtime_controller_widget import RealtimeControllerWidget
 from hardware.camera_basler import BaslerCamera
 from hardware.camera_opencv import OpenCVCamera
 from hardware.device_discovery import list_camera_devices, list_serial_devices
-from hardware.open_micro_stage_api import OpenMicroStageInterface
+from hardware.open_micro_stage_api import OpenMicroStageInterface, SerialInterface
 from image_processing.image_point_tracker import ImagePointTracker
 from optical_alignment import OpticalAlignment
 from version import __version__
@@ -595,15 +595,37 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
     def home(self):
         if not self.require_stage_connection():
             return
+        if self.realtime_control_widget.is_running():
+            QMessageBox.warning(self, "Realtime Control Active", "Stop realtime mouse control before homing.")
+            return
 
-        self.oms.home()
+        status = self.oms.home()
+        if status != SerialInterface.ReplyStatus.OK:
+            detail = self.oms.last_home_error or status.name
+            QMessageBox.warning(self, "Home Failed",
+                                f"Controller did not complete Home successfully:\n{detail}\n"
+                                "Do not assume all axes are homed; inspect the controller logs.")
+            return
         position = self.oms.read_current_position(True)
-        if position[0] is not None:
+        if all(value is not None and np.isfinite(value) for value in position):
             self.current_pos = list(position)
+        else:
+            QMessageBox.warning(self, "Position Unavailable", "Home completed, but the controller target could not be read.")
 
     def move_axis(self, axis, direction):
         if not self.require_stage_connection():
             return
+        if self.realtime_control_widget.is_running():
+            QMessageBox.warning(self, "Realtime Control Active", "Stop realtime mouse control before jogging.")
+            return
+
+        # M50 reports the last accepted controller target, not measured position.
+        # Refresh it so another control mode cannot leave the jog cache stale.
+        position_read = self.oms.read_current_position(True)
+        if any(value is None or not np.isfinite(value) for value in position_read):
+            QMessageBox.warning(self, "Position Unavailable", "Cannot read the controller target; jog cancelled.")
+            return
+        self.current_pos = list(position_read)
 
         flipped = (1, 1, 1)
         d = self.step_sizes[self.step_size_idx]
@@ -616,8 +638,14 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         target = max(lower_limit, min(target, upper_limit))
         if target == position:
             return
-        self.current_pos[axis] = target
-        self.oms.move_to(*self.current_pos, self.feedrates[self.step_size_idx])
+        candidate = list(self.current_pos)
+        candidate[axis] = target
+        status = self.oms.move_to(*candidate, self.feedrates[self.step_size_idx])
+        if status == SerialInterface.ReplyStatus.OK:
+            self.current_pos = candidate
+        else:
+            detail = self.oms.last_motion_error or status.name
+            QMessageBox.warning(self, "Move Not Accepted", f"Controller did not accept the jog:\n{detail}")
 
     def add_waypoint(self):
         if not self.require_stage_connection():

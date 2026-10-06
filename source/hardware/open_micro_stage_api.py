@@ -247,6 +247,8 @@ class OpenMicroStageInterface:
     }
 
     def __init__(self, show_communication=True, show_log_messages=True):
+        self.last_motion_error = ""
+        self.last_home_error = ""
         self.serial = None
         self.workspace_transform = np.eye(4)
         self.workspace_transform_inv = np.linalg.inv(self.workspace_transform)
@@ -379,6 +381,7 @@ class OpenMicroStageInterface:
             cmd += ' '+axis_chars[axis_idx]
 
         res, msg = self.serial.send_command(cmd + "\n", 10)
+        self.last_home_error = self.serial._response_error_msg or msg
         return res
 
     def calibrate_joint(self, joint_index: int, save_result: bool):
@@ -423,6 +426,7 @@ class OpenMicroStageInterface:
         while True:
             res, msg = self.serial.send_command(cmd + "\n", timeout=timeout)
             if res != SerialInterface.ReplyStatus.BUSY or not blocking:
+                self.last_motion_error = self.serial._response_error_msg or msg
                 return res
 
     def dwell(self, time_s, blocking, timeout=1):
@@ -503,6 +507,7 @@ class OpenMicroStageInterface:
 
         cmd = f"G24 X{x_t:.6f} Y{y_t:.6f} Z{z_t:.6f}" # TODO: A, B ,C
         res, msg = self.serial.send_command(cmd)
+        self.last_motion_error = self.serial._response_error_msg or msg
         return res
 
     def set_tool_output(self, tool_idx: int, output_value: float, immediate: bool = True):
