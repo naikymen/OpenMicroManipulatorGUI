@@ -26,6 +26,16 @@ Make sure you are using a compatible Python version and that your hardware is pr
 
 The GUI now lists available serial devices and cameras directly in the interface. Use the `Refresh`, `Connect`, and `Disconnect` controls to manage the micromanipulator and camera at runtime.
 
+## Disable motors
+
+**Disable Motors**, beside **Set Origin**, stops realtime mouse control and
+waypoint playback, requests G-code playback to stop, and sends `M18` to disable
+all motors. It is available only while connected and reports unconfirmed or
+failed disable requests. It does not change the origin or stored calibrations.
+
+Disabling removes holding torque; support the stage if needed. This is not an
+emergency stop and cannot interrupt a blocking controller command immediately.
+
 ## Axis calibration
 
 In the Advanced tab, the full-width axis selector controls both **Home Axis**

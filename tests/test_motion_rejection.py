@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "source"))
@@ -27,6 +27,7 @@ class FakeStage:
         self.last_motion_error = "invalid or out-of-range Cartesian path"
         self.last_home_error = "homing or servo restart failed; inspect HOME GUARD logs"
         self.moves = []
+        self.motor_enable_requests = []
 
     def is_connected(self):
         return self.connected
@@ -41,6 +42,10 @@ class FakeStage:
         return self.status
 
     def home(self):
+        return self.status
+
+    def enable_motors(self, enable):
+        self.motor_enable_requests.append(enable)
         return self.status
 
 
@@ -111,6 +116,80 @@ class MotionRejectionTests(unittest.TestCase):
         self.window.home()
         self.assertEqual(self.window.current_pos, self.stage.position)
         self.assertEqual(self.warnings, [])
+
+    def test_disable_button_sends_one_disable_without_changing_position(self):
+        original_position = list(self.window.current_pos)
+        with patch.object(self.stage, "read_current_position", side_effect=AssertionError("Unexpected read")):
+            self.window.btn_disable_motors.click()
+        self.assertEqual(self.stage.motor_enable_requests, [False])
+        self.assertEqual(self.window.current_pos, original_position)
+        self.assertEqual(self.stage.moves, [])
+        self.assertEqual(self.warnings, [])
+
+    def test_disable_stops_gui_command_sources_before_sending(self):
+        self.window.waypoints = [[[1.0, 2.0, 3.0], 5.0]]
+        self.window.waypoint_idx = 0
+        runner = Mock()
+        self.window.gcode_runner = runner
+        self.window.run_gcode_button.setChecked(True)
+        events = Mock()
+        events.attach_mock(runner.stop, "gcode_stop")
+        with patch.object(self.window.realtime_control_widget, "is_running", return_value=True), \
+             patch.object(self.window.realtime_control_widget, "stop_control") as realtime_stop, \
+             patch.object(self.stage, "enable_motors", wraps=self.stage.enable_motors) as disable:
+            events.attach_mock(realtime_stop, "realtime_stop")
+            events.attach_mock(disable, "disable")
+            self.window.btn_disable_motors.click()
+        self.assertEqual(events.mock_calls, [call.realtime_stop(), call.gcode_stop(), call.disable(False)])
+        self.assertIsNone(self.window.gcode_runner)
+        self.assertFalse(self.window.run_gcode_button.isChecked())
+        frame = np.zeros((32, 32, 3), dtype=np.uint8)
+        self.window.update_controller(frame, frame.copy(), 1.0)
+        self.assertEqual(self.stage.moves, [])
+
+    def test_disable_button_is_disabled_when_disconnected(self):
+        self.stage.connected = False
+        self.window.update_connection_state()
+        self.assertFalse(self.window.btn_disable_motors.isEnabled())
+        self.window.btn_disable_motors.click()
+        self.assertEqual(self.stage.motor_enable_requests, [])
+        self.window.disable_motors()
+        self.assertEqual(self.stage.motor_enable_requests, [])
+        self.assertEqual(self.warnings[-1][1], "Manipulator Disconnected")
+
+    def test_unsuccessful_disable_is_reported_without_retry(self):
+        for status in (Status.ERROR, Status.BUSY, Status.TIMEOUT):
+            with self.subTest(status=status):
+                self.stage.status = status
+                count = len(self.stage.motor_enable_requests)
+                self.window.btn_disable_motors.click()
+                self.assertEqual(len(self.stage.motor_enable_requests), count + 1)
+                self.assertEqual(self.warnings[-1][1], "Disable Motors Failed")
+                self.assertIn(status.name, self.warnings[-1][2])
+
+    def test_disable_communication_exception_is_reported(self):
+        with patch.object(self.stage, "enable_motors", side_effect=OSError("serial disconnected")) as disable:
+            self.window.btn_disable_motors.click()
+        disable.assert_called_once_with(False)
+        self.assertEqual(self.warnings[-1][1], "Disable Motors Failed")
+        self.assertIn("serial disconnected", self.warnings[-1][2])
+
+    def test_disable_button_is_next_to_set_origin(self):
+        self.window.show()
+        self.app.processEvents()
+        origin = self.window.btn_set_origin
+        disable = self.window.btn_disable_motors
+        self.assertEqual(disable.text(), "Disable Motors")
+        self.assertEqual(disable.y(), origin.y())
+        self.assertEqual(disable.height(), origin.height())
+        self.assertGreater(disable.x(), origin.geometry().right())
+
+    def test_disable_api_sends_m18(self):
+        interface = OpenMicroStageInterface(show_communication=False)
+        interface.serial = Mock()
+        interface.serial.send_command.return_value = (Status.OK, "")
+        self.assertEqual(interface.enable_motors(False), Status.OK)
+        interface.serial.send_command.assert_called_once_with("M18", timeout=5)
 
     def test_missing_position_or_active_mouse_prevents_jog(self):
         self.stage.position = [None, None, None]

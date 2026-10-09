@@ -218,6 +218,7 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         # Advanced tab
         self.btn_3point_alignment.clicked.connect(self.run_3point_alignment)
         self.btn_set_origin.clicked.connect(self.set_origin)
+        self.btn_disable_motors.clicked.connect(self.disable_motors)
         self.btn_set_tracking.clicked.connect(self.set_tracking_point)
         self.btn_clear.clicked.connect(self.clear_draw_buffer)
         self.btn_load_transform.clicked.connect(self.load_transform)
@@ -712,6 +713,29 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
                 handle.write("\n; End of file\n")
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", f"Failed to save G-code file:\n{exc}")
+
+    def disable_motors(self):
+        if not self.require_stage_connection():
+            return
+
+        # Stop GUI command sources before removing motor power.
+        self.waypoint_idx = 1000000
+        if self.realtime_control_widget.is_running():
+            self.realtime_control_widget.stop_control()
+        self.stop_gcode_runner()
+
+        try:
+            status = self.oms.enable_motors(False)
+        except Exception as exc:
+            QMessageBox.warning(self, "Disable Motors Failed",
+                                f"Could not disable motors:\n{exc}\n"
+                                "Do not assume the motors are disabled.")
+            return
+
+        if status != SerialInterface.ReplyStatus.OK:
+            QMessageBox.warning(self, "Disable Motors Failed",
+                                f"Controller did not confirm motor disable: {status.name}.\n"
+                                "Do not assume the motors are disabled.")
 
     def set_origin(self):
         if not self.require_stage_connection():

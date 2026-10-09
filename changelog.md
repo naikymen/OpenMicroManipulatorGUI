@@ -1,5 +1,16 @@
 # Changelog
 
+## Disable motors from the main controls
+
+- Add Disable Motors next to Set Origin, using the existing motor-disable API
+  (`M18`) without changing the origin, calibration or firmware.
+- Stop realtime control and waypoint playback and request G-code playback to
+  stop before disabling, so the GUI stops producing new motion commands.
+  Disable the button when disconnected and report rejected, timed-out or
+  failed requests instead of assuming power was removed.
+- Document the loss of holding torque and that this serial control is not an
+  emergency stop. Add seven offline button, failure, layout and API regressions.
+
 ## Individual axis homing and calibration controls
 
 - Add a full-width All/X/Y/Z selector above Home Axis, Calibrate Axis and Save.
