@@ -1,5 +1,49 @@
 # Changelog
 
+## Add the Raspberry Pi HQ camera as a selectable camera
+
+- Add `source/hardware/camera_pi.py`, an `AbstractCamera` implementation that
+  presents the Pi's MJPEG preview as a normal camera, so the HQ camera behind a
+  40x objective appears in the existing camera dropdown, streams into the
+  existing worker, and answers the existing exposure, gain and white balance
+  controls without changing the measurement, calibration or motion paths.
+- Discover the Pi by probing the address used last, the built-in defaults, and
+  any address typed into the camera box, accepting `host`, `host:port`,
+  `http://host:port` and mDNS names alike. Skip a network scan on purpose: a
+  camera that does not answer simply does not appear in the list, and a typed
+  address that fails produces a dialog naming the exact address instead of an
+  empty dropdown.
+- Map the GUI's exposure, gain and white balance controls onto libcamera
+  semantics rather than passing values through: a non-positive value re-enables
+  automatic control instead of forcing an invalid setting, gain is converted
+  from decibels to a linear factor, and requested values are clamped into the
+  range the sensor reports.
+- Report the real problem when the preview cannot be reached. Pass explicit
+  open and read timeouts to `cv2.VideoCapture`, because OpenCV otherwise blocks
+  for its internal 30 seconds and froze the GUI while switching cameras; an
+  unreachable address now fails in 3 seconds and a refused connection in 0.02
+  seconds. Note that these two properties are honoured only as constructor
+  arguments, since `cap.set()` returns `False` and silently has no effect.
+- Recover control ranges when the daemon was still starting during the initial
+  probe, so the sliders are not left disabled for the session, and widen a
+  degenerate range instead of reporting a range no value can satisfy.
+- Align the client's default port with the service. The client previously
+  defaulted to 8080 while the service, its CLI and its systemd unit all used
+  8000, so a user following the deployment instructions would start a service
+  the GUI could never find.
+- Add 59 offline regressions in `tests/test_camera_pi.py` covering address
+  parsing, probing, discovery, frame decoding, streaming, disconnections,
+  stream timeouts, controls, still capture and dark-image capture. The suite
+  serves genuine JPEG bytes from a real `ThreadingHTTPServer` on a loopback
+  port so actual OpenCV decoding is exercised, and asserts the colour of a
+  decoded frame against a known source value so a channel swap cannot pass.
+- Size the preview worker's join budget from the camera's own read deadline
+  instead of a fixed 1500 ms, because the explicit OpenCV read timeout above
+  lets a stalled stream hold that thread for up to 2 seconds. Keep hold of a
+  worker that outlives its join rather than dropping the last reference, since
+  Qt aborts the process when a running `QThread` is destroyed. Add 10 offline
+  regressions, verified to fail against the previous fixed budget.
+
 ## Disable motors from the main controls
 
 - Add Disable Motors next to Set Origin, using the existing motor-disable API

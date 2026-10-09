@@ -952,6 +952,12 @@ color: rgb(80, 130, 140);</string>
               <string notr="true">font: italic 11pt &quot;Noto Sans Vai&quot;;
 color: rgb(80, 130, 140);</string>
              </property>
+             <property name="editable">
+              <bool>true</bool>
+             </property>
+             <property name="insertPolicy">
+              <enum>QComboBox::InsertPolicy::NoInsert</enum>
+             </property>
             </widget>
            </item>
            <item row="4" column="1">

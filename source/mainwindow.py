@@ -17,6 +17,7 @@ from gui_components.image_viewer_widget import ImageViewerWidget
 from gui_components.realtime_controller_widget import RealtimeControllerWidget
 from hardware.camera_basler import BaslerCamera
 from hardware.camera_opencv import OpenCVCamera
+from hardware.camera_pi import PiCamera, probe_address
 from hardware.device_discovery import list_camera_devices, list_serial_devices
 from hardware.open_micro_stage_api import OpenMicroStageInterface, SerialInterface
 from image_processing.image_point_tracker import ImagePointTracker
@@ -48,6 +49,12 @@ class CameraStreamWorker(QThread):
     frame_ready = Signal(object)
     stream_error = Signal(str)
 
+    # A stalled stream holds the worker inside a single blocking read, so the
+    # join budget has to cover the camera's own read deadline or `stop()` gives
+    # up while the thread is still alive.
+    DEFAULT_STOP_TIMEOUT_MS = 1500
+    STOP_TIMEOUT_MARGIN_MS = 500
+
     def __init__(self, camera, parent=None):
         super().__init__(parent)
         self.camera = camera
@@ -59,7 +66,20 @@ class CameraStreamWorker(QThread):
             self.camera.stop_grabbing()
         except Exception:
             pass
-        self.wait(1500)
+        return self.wait(self.stop_timeout_ms())
+
+    def stop_timeout_ms(self):
+        # stop() runs on every camera switch and on shutdown, so a camera that
+        # reports a nonsense deadline must not be able to turn this into an
+        # exception. Anything that is not a usable positive number falls back to
+        # the default budget.
+        try:
+            read_timeout = int(getattr(self.camera, "stream_read_timeout_ms", 0))
+        except (TypeError, ValueError):
+            return self.DEFAULT_STOP_TIMEOUT_MS
+        if read_timeout <= 0:
+            return self.DEFAULT_STOP_TIMEOUT_MS
+        return read_timeout + self.STOP_TIMEOUT_MARGIN_MS
 
     def _handle_frame(self, frame):
         if not self.running:
@@ -124,6 +144,7 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         self.oms = oms
         self.camera = camera
         self.camera_stream_worker = None
+        self.abandoned_camera_stream_workers = []
         self.gcode_runner = None
 
         self.settings = QSettings()
@@ -295,7 +316,10 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         selected_id = self.camera_combo.currentData().get("id") if self.camera_combo.currentData() else None
         if selected_id is None:
             selected_id = self.settings.value("Connections/last_camera_id")
-        self.camera_devices = list_camera_devices()
+        last_pi_address = self.settings.value("Connections/last_pi_camera_address")
+        self.camera_devices = list_camera_devices(
+            extra_pi_addresses=[last_pi_address] if last_pi_address else None
+        )
         self.camera_combo.clear()
 
         for device in self.camera_devices:
@@ -322,7 +346,9 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         self.serial_connect_button.setText("Close" if stage_connected else "Open")
         self.serial_connect_button.setEnabled(stage_connected or self.serial_combo.count() > 0)
         self.camera_connect_button.setText("Close" if camera_connected else "Open")
-        self.camera_connect_button.setEnabled(camera_connected or self.camera_combo.count() > 0)
+        # The camera box is editable, so a typed Pi camera address is always a
+        # possible selection even when discovery found nothing at all.
+        self.camera_connect_button.setEnabled(True)
 
         stage_status = f"[{self.connected_stage_label}]" if stage_connected else "[Disconnected]"
         camera_status = f"[{self.connected_camera_label}]" if camera_connected else "[Disconnected]"
@@ -400,7 +426,41 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         if config["kind"] == "basler":
             return BaslerCamera(device_serial=config["id"])
 
+        if config["kind"] == "picamera":
+            return PiCamera(host=config["host"], port=config.get("port"), label=config.get("label"))
+
         raise ValueError(f"Unsupported camera kind: {config['kind']}")
+
+    def resolve_typed_camera_address(self, text):
+        """Turn a typed address into a Pi camera config, or None if unrecognized.
+
+        The camera box is editable because a Pi camera service has no guaranteed
+        address: over USB Ethernet gadget or an ad-hoc LAN the user has to type
+        where it lives. Only a reachable service is accepted, so a stray
+        keystroke does not silently become a camera.
+        """
+        candidate = text.strip()
+        if not candidate:
+            return None
+
+        # Drop the decoration that discovered entries carry, so re-typing a
+        # listed label still resolves.
+        candidate = candidate.removeprefix("Pi Camera ").strip()
+
+        if not candidate:
+            return None
+
+        device = probe_address(candidate)
+        if device is None:
+            QMessageBox.warning(
+                self,
+                "Pi Camera Not Found",
+                f"No camera service answered at:\n{candidate}\n\n"
+                "Check the address, the port (default 8000) and that "
+                "picamera_daemon.py is running on the Pi.",
+            )
+            return None
+        return device
 
     def connect_selected_camera(self):
         if self.camera is not None and self.camera.is_connected():
@@ -408,8 +468,11 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
 
         config = self.camera_combo.currentData()
         if config is None:
-            QMessageBox.warning(self, "No Camera", "No camera is available.")
-            return
+            config = self.resolve_typed_camera_address(self.camera_combo.currentText())
+            if config is None:
+                return
+            # Remember the typed address so it is offered again next time.
+            self.settings.setValue("Connections/last_pi_camera_address", f"{config['host']}:{config['port']}")
 
         try:
             camera = self.create_camera_from_config(config)
@@ -427,6 +490,8 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         self.camera = camera
         self.connected_camera_label = config["label"]
         self.settings.setValue("Connections/last_camera_id", config["id"])
+        if config["kind"] == "picamera":
+            self.settings.setValue("Connections/last_pi_camera_address", f"{config['host']}:{config['port']}")
         self.clear_visual_state()
         self.load_camera_settings(self.connected_camera_label)
         self.apply_camera_settings()
@@ -497,8 +562,15 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
 
     def stop_camera_stream(self):
         if self.camera_stream_worker is not None:
-            self.camera_stream_worker.stop()
-            self.camera_stream_worker = None
+            stopped = self.camera_stream_worker.stop()
+            if stopped:
+                self.camera_stream_worker = None
+            else:
+                # Qt aborts the process when a running QThread is destroyed, so
+                # keep hold of a worker that outlived its join budget. It exits
+                # on its own once the in-flight read returns.
+                self.abandoned_camera_stream_workers.append(self.camera_stream_worker)
+                self.camera_stream_worker = None
 
     def disconnect_camera(self, show_placeholder=True):
         self.stop_camera_stream()
