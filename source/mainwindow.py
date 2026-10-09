@@ -83,7 +83,7 @@ class CalibrationPlotDialog(QDialog):
     embeds the matplotlib canvas in a Qt dialog instead of opening a blocking window.
     """
 
-    def __init__(self, joint_data, parent=None):
+    def __init__(self, joint_data, parent=None, save_result=True):
         super().__init__(parent)
         self.setWindowTitle("Axis Calibration")
         self.resize(900, 640)
@@ -107,7 +107,8 @@ class CalibrationPlotDialog(QDialog):
         ax.grid(True)
         canvas.figure.tight_layout()
 
-        saved_label = QLabel("Calibration saved to device")
+        saved_label = QLabel("Calibration saved to device" if save_result
+                             else "Calibration not saved to persistent storage")
         saved_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout = QVBoxLayout(self)
@@ -222,7 +223,20 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         self.btn_load_transform.clicked.connect(self.load_transform)
         self.btn_save_transform.clicked.connect(self.save_transform)
         self.btn_fiber_alignment.clicked.connect(self.run_fiber_alignment)
-        self.btn_calibrate_axis.clicked.connect(self.run_axis_calibration)
+        # Hardware axes are numbered 1–3; firmware joint indices are 0–2.
+        self.axis_selector_combo.addItem("All axes (1–3 / J0–J2 / G28 A B C)", (0, 1, 2))
+        for joint_index, (axis_name, home_letter) in enumerate(zip(("X", "Y", "Z"), ("A", "B", "C"))):
+            self.axis_selector_combo.addItem(
+                f"{axis_name} (Axis {joint_index + 1} / J{joint_index} / G28 {home_letter})",
+                (joint_index,),
+            )
+        # Use the checkbox state, not clicked's checked flag, for persistence.
+        self.btn_calibrate_axis.clicked.connect(
+            lambda checked=False: self.run_axis_calibration(
+                save_result=self.save_calibration_checkbox.isChecked()
+            )
+        )
+        self.btn_home_axis.clicked.connect(lambda checked=False: self.run_axis_homing())
 
         # Path / GCode tab
         self.btn_add_waypoint.clicked.connect(self.add_waypoint)
@@ -236,7 +250,7 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         self.btn_dark_shot_compensation.clicked.connect(self.capture_dark_image)
 
         # Home button
-        self.btn_home.clicked.connect(self.home)
+        self.btn_home.clicked.connect(lambda checked=False: self.home())
 
         self.main_tabs.setCurrentIndex(0)
         self.update_waypoint_info()
@@ -562,12 +576,12 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
         if not self.require_stage_connection():
             return
 
-        num_joints = 3
+        joint_indices = self.axis_selector_combo.currentData()
         joint_data = []
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            for joint_index in range(num_joints):
+            for joint_index in joint_indices:
                 # save_result=True persists the calibration on the controller.
                 res, data = self.oms.calibrate_joint(joint_index, save_result=save_result)
                 if data and len(data) >= 3 and len(data[0]) > 0:
@@ -583,7 +597,7 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
             QMessageBox.warning(self, "Calibration Failed", "No calibration data was returned by the controller.")
             return
 
-        dialog = CalibrationPlotDialog(joint_data, self)
+        dialog = CalibrationPlotDialog(joint_data, self, save_result=save_result)
         dialog.show()
 
     def on_stop_realtime_control(self):
@@ -592,14 +606,21 @@ class DeviceControlMainWindow(QMainWindow, Ui_DeviceControlMainWindow):
             if position[0] is not None:
                 self.current_pos[:] = position
 
-    def home(self):
+    def run_axis_homing(self):
+        joint_indices = self.axis_selector_combo.currentData()
+        if len(joint_indices) == 3:
+            self.home()
+        else:
+            self.home(axis_list=joint_indices)
+
+    def home(self, axis_list=None):
         if not self.require_stage_connection():
             return
         if self.realtime_control_widget.is_running():
             QMessageBox.warning(self, "Realtime Control Active", "Stop realtime mouse control before homing.")
             return
 
-        status = self.oms.home()
+        status = self.oms.home() if axis_list is None else self.oms.home(axis_list=axis_list)
         if status != SerialInterface.ReplyStatus.OK:
             detail = self.oms.last_home_error or status.name
             QMessageBox.warning(self, "Home Failed",

@@ -1,5 +1,20 @@
 # Changelog
 
+## Individual axis homing and calibration controls
+
+- Add a full-width All/X/Y/Z selector above Home Axis, Calibrate Axis and Save.
+  Both actions use the same selection, with labels showing hardware axes 1–3,
+  firmware joints J0–J2 and homing command words A/B/C to identify the intended
+  motor/encoder pair. Keep All axes as the default and the original Home
+  button's all-axis behavior.
+- Add a checked-by-default Save checkbox to preserve calibration persistence
+  by default while permitting temporary in-memory calibrations. Prevent the
+  button's Qt checked flag from overriding the saving choice and reflect the
+  chosen persistence mode in the plot dialog.
+- Preserve homing's realtime-control guard and controller-error handling.
+  Include documentation and 14 offline Qt/API regressions for shared selection,
+  defaults, persistence, individual homing, rejection and the requested layout.
+
 ## Allow the complete homing sequence to finish
 
 - Increase the G28 reply timeout from 10 to 30 seconds to accommodate the

@@ -26,6 +26,26 @@ Make sure you are using a compatible Python version and that your hardware is pr
 
 The GUI now lists available serial devices and cameras directly in the interface. Use the `Refresh`, `Connect`, and `Disconnect` controls to manage the micromanipulator and camera at runtime.
 
+## Axis calibration
+
+In the Advanced tab, the full-width axis selector controls both **Home Axis**
+and **Calibrate Axis** in the row below, alongside the **Save** checkbox.
+**All axes** is selected by default and calibrates all three joints in order.
+The individual choices are X (Axis 1 / J0 / G28 A), Y (Axis 2 / J1 / G28 B),
+and Z (Axis 3 / J2 / G28 C). They calibrate or home only the selected
+motor/encoder pair; A, B and C are the respective homing command letters.
+**Save** is checked by default and writes the new
+calibration to the controller's persistent storage. Uncheck it to apply the
+new calibration only in memory without replacing the saved calibration; the
+plot dialog also shows whether saving was requested.
+Hardware axis numbers are 1-based; firmware joint numbers are 0-based.
+
+**Home Axis** homes all axes or only the selected joint. **Save** affects
+calibration only, not homing.
+The original Home button still homes all axes, regardless of this selection.
+Both homing buttons keep the same realtime-control guard and controller error
+handling. Stop realtime mouse control before homing.
+
 ## Jog and realtime motion rejection
 
 Cartesian coordinate bounds in the GUI are not actuator travel limits. Use
@@ -55,6 +75,7 @@ from this GUI directory:
 
 ```bash
 QT_QPA_PLATFORM=offscreen python tests/test_motion_rejection.py -v
+QT_QPA_PLATFORM=offscreen python tests/test_axis_calibration.py -v
 ```
 
 The tests mock stage and camera access and never open a hardware connection.
