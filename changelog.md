@@ -1,5 +1,14 @@
 # Changelog
 
+## Allow the complete homing sequence to finish
+
+- Increase the G28 reply timeout from 10 to 30 seconds to accommodate the
+  end-stop search, measured backoff, guarded feedback handover and final move
+  into the usable range. A successful full sequence should not be reported
+  as timed out merely because it takes longer than the previous allowance.
+- Preserve command selection and controller-error handling; this changes only
+  how long the GUI API waits for the reply, not firmware homing behavior.
+
 ## Report unsuccessful Home commands
 
 - Preserve Home's controller error and show `Home Failed` when stop detection

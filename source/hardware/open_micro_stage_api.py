@@ -380,7 +380,10 @@ class OpenMicroStageInterface:
                 raise ValueError('Axis index out of range')
             cmd += ' '+axis_chars[axis_idx]
 
-        res, msg = self.serial.send_command(cmd + "\n", 10)
+        # Homing includes the end-stop search, measured backoff, guarded
+        # feedback handover, and the final move into the usable range. Let the
+        # controller finish that complete sequence before declaring a timeout.
+        res, msg = self.serial.send_command(cmd + "\n", 30)
         self.last_home_error = self.serial._response_error_msg or msg
         return res
 
